@@ -1,0 +1,135 @@
+resource "aws_vpc" "myvpc" {
+tags = {
+Name = "my-terraform-vpc"
+}
+cidr_block = "12.0.0.0/16"
+instance_tenancy = "default"
+enable_dns_hostnames = "true"
+}
+
+resource "aws_subnet" "mysubnet1" {
+vpc_id = aws_vpc.myvpc.id
+tags = {
+Name = "mysubnet-11"
+}
+cidr_block = "12.0.1.0/24"
+availability_zone = "us-east-1a"
+map_public_ip_on_launch = "true"
+}
+
+resource "aws_subnet" "mysubnet2" {
+vpc_id = aws_vpc.myvpc.id
+tags = {
+Name = "mysubnet-22"
+}
+cidr_block = "12.0.2.0/24"
+availability_zone = "us-east-1b"
+map_public_ip_on_launch = "true"
+}
+
+resource "aws_internet_gateway" "myigw" {
+vpc_id = aws_vpc.myvpc.id
+tags = {
+Name = "my-igw"
+}
+}
+
+resource "aws_route_table" "myrt"{
+vpc_id = aws_vpc.myvpc.id
+tags = {
+Name = "my-route-table"
+}
+route {
+cidr_block = "0.0.0.0/0"
+gateway_id = aws_internet_gateway.myigw.id
+}
+}
+
+resource "aws_route_table_association" "public_subnet_ass1a" {
+subnet_id = aws_subnet.mysubnet1.id
+route_table_id = aws_route_table.myrt.id
+}
+
+resource "aws_route_table_association" "public_subnet_ass1b" {
+subnet_id = aws_subnet.mysubnet2.id
+route_table_id = aws_route_table.myrt.id
+}
+
+resource "aws_security_group" "web_server" {
+name = "we-server-sg"
+vpc_id = aws_vpc.myvpc.id
+
+ingress{
+from_port = 22
+to_port = 22
+protocol = "tcp"
+cidr_blocks = ["0.0.0.0/0"]
+}
+
+ingress{
+from_port = 80
+to_port = 80
+protocol = "tcp"
+cidr_blocks = ["0.0.0.0/0"]
+}
+
+ingress{
+from_port = 443
+to_port = 443
+protocol = "tcp"
+cidr_blocks = ["0.0.0.0/0"]
+}
+
+egress{
+from_port = 0
+to_port = 0
+protocol = "-1"
+cidr_blocks = ["0.0.0.0/0"]
+}
+}
+
+
+resource "aws_launch_configuration" "web_server_as" {
+image_id = "ami-0195204d5dce06d99"
+instance_type = "t2.micro"
+security_groups = [aws_security_group.web_server.id]
+name = "terrafoem-lc"
+
+
+user_data = <<-EOF
+#!/bin/bash
+sudo yum update -y
+sudo yum install httpd -y
+sudo systemctl start httpd
+sudo systemctl enable httpd
+sudo systemctl restart httpd
+sudo touch /var/www/html/index.html
+sudo chmod 766 /var/www/html/index.html
+sudo echo "<html> <h1> Welcome to teraform scalling </h1> </html>" >> /var/www/html/index.html
+
+EOF
+}
+
+resource "aws_elb" "my_web_server_lb" {
+name = "web-server-lb"
+security_groups = [aws_security_group.web_server.id]
+subnets = [aws_subnet.mysubnet1.id,aws_subnet.mysubnet2.id]
+listener {
+instance_port = 8000
+instance_protocol = "http"
+
+lb_port = 80
+lb_protocol = "http"
+}
+}
+
+resource "aws_autoscaling_group" "web_server_asg" {
+name = "web-server-asg"
+launch_configuration = aws_launch_configuration.web_server_as.id
+min_size = 1
+max_size = 3
+desired_capacity = 2
+health_check_type = "EC2"
+load_balancers = [aws_elb.my_web_server_lb.id]
+vpc_zone_identifier = [aws_subnet.mysubnet1.id,aws_subnet.mysubnet2.id]
+}
